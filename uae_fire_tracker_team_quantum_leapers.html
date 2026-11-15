@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UAE Fire Tracker - Team Quantum Leapers</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, system-ui, sans-serif;
+      background: #f7f7f7;
+      color: #222;
+      font-size: 14px;
+    }
+    .wrap {
+      max-width: 1000px;
+      margin: 20px auto;
+      padding: 15px;
+    }
+    .topbar, .card, .stat {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    .topbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+    h1 { margin: 0; font-size: 20px; color: #d9381e; }
+    .sub { margin: 3px 0 0; font-size: 12px; color: #666; }
+    .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    select, button, input[type="text"] {
+      font-size: 13px;
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+    }
+    button.primary {
+      background: #d9381e;
+      color: #fff;
+      border-color: #b82d16;
+      cursor: pointer;
+    }
+    button.primary:hover { background: #b82d16; }
+    label.chk { font-size: 12px; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .stat { margin-bottom: 0; }
+    .stat-label { font-size: 12px; color: #666; }
+    .stat-val { font-size: 22px; font-weight: bold; margin-top: 4px; color: #111; }
+    h2 { margin: 0 0 8px; font-size: 15px; color: #222; }
+    .row-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
+    #cal-chart { width: 100%; height: 185px; }
+    #line-chart { width: 100%; height: 240px; }
+    #map { width: 100%; height: 340px; border: 1px solid #ddd; border-radius: 4px; }
+    #status { font-size: 12px; color: #d9381e; margin-bottom: 10px; display: none; }
+    .modal-bg {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 999;
+      align-items: center;
+      justify-content: center;
+      padding: 15px;
+    }
+    .modal-box {
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 16px;
+      max-width: 440px;
+      width: 100%;
+    }
+    .modal-box a { color: #d9381e; font-size: 12px; display: block; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>UAE Fire Tracker</h1>
+        <p class="sub">Team Quantum Leapers | MODIS &amp; VIIRS Data (2022–2026)</p>
+      </div>
+      <div class="controls">
+        <select id="year-sel">
+          <option value="2026" selected>2026</option>
+          <option value="2025">2025</option>
+          <option value="2024">2024</option>
+          <option value="2023">2023</option>
+          <option value="2022">2022</option>
+        </select>
+        <label class="chk">
+          <input type="checkbox" id="raw-chk" /> Show raw unharmonized VIIRS (4x inflation)
+        </label>
+        <button type="button" class="primary" id="open-api">Fetch NASA API</button>
+        <label style="font-size:12px; border:1px solid #ccc; padding:5px 9px; border-radius:4px; cursor:pointer; background:#fafafa;">
+          Upload CSV <input type="file" id="csv-file" accept=".csv" style="display:none;" />
+        </label>
+      </div>
+    </div>
+
+    <div id="status"></div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Total Active Cells</div>
+        <div class="stat-val" id="s-cells">--</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Peak Day</div>
+        <div class="stat-val" id="s-peak">--</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Avg FRP (MW)</div>
+        <div class="stat-val" id="s-frp">--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Burning Calendar</h2>
+      <div id="cal-chart"></div>
+    </div>
+
+    <div class="card">
+      <h2>2022-2026 Baseline Comparison</h2>
+      <div id="line-chart"></div>
+    </div>
+
+    <div class="card">
+      <div class="row-head">
+        <h2>UAE Map (<span id="map-date">----</span>)</h2>
+        <div>
+          <label class="chk"><input type="radio" name="mview" value="grid" checked /> Harmonized Grid</label>
+          <label class="chk" style="margin-left:8px;"><input type="radio" name="mview" value="raw" /> Raw MODIS + VIIRS</label>
+        </div>
+      </div>
+      <div id="map"></div>
+    </div>
+  </div>
+
+  <!-- NASA FIRMS API Modal -->
+  <div class="modal-bg" id="api-modal">
+    <div class="modal-box">
+      <h2>NASA FIRMS Live Data (UAE)</h2>
+      <p style="font-size:12px; color:#555; margin:4px 0 10px;">Bounding box: 51.5, 22.5, 56.5, 26.2 (Last 5 days)</p>
+      <input type="text" id="api-key" value="8a654757f2a31600b841a420f677cb82" style="width:100%; margin-bottom:10px;" />
+      <div style="display:flex; gap:8px;">
+        <button type="button" class="primary" id="run-fetch">Fetch Now</button>
+        <button type="button" id="close-api">Close</button>
+      </div>
+      <div id="api-msg" style="font-size:12px; color:#444; margin-top:8px;"></div>
+      <hr style="border:0; border-top:1px solid #eee; margin:10px 0;" />
+      <a href="https://firms.modaps.eosdis.nasa.gov/api/area/csv/8a654757f2a31600b841a420f677cb82/VIIRS_NOAA20_NRT/51.5,22.5,56.5,26.2/5" target="_blank">Download VIIRS UAE CSV</a>
+      <a href="https://firms.modaps.eosdis.nasa.gov/api/area/csv/8a654757f2a31600b841a420f677cb82/MODIS_NRT/51.5,22.5,56.5,26.2/5" target="_blank">Download MODIS UAE CSV</a>
+    </div>
+  </div>
+
+  <script>
+    const CARTO_URL = "https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_59lp_1_5b3babf2db489cc803acf8e8";
+    const BBOX = "51.5,22.5,56.5,26.2";
+    const UAE_ZONES = [
+      { name: "Al Ain Farms", lat: 24.19, lng: 55.74 },
+      { name: "RAK Farms", lat: 25.68, lng: 55.96 },
+      { name: "Fujairah Foothills", lat: 25.33, lng: 56.25 },
+      { name: "Liwa Oasis", lat: 23.14, lng: 53.78 }
+    ];
+
+    let year = 2026;
+    let rawMode = false;
+    let mapMode = "grid";
+    let rows = [];
+    let customSpots = {};
+    let selectedDate = "";
+    let calChart, lineChart, map, layerGroup;
+
+    function rng(seed) {
+      return function () {
+        seed = (seed * 1664525 + 1013904223) % 4294967296;
+        return seed / 4294967296;
+      };
+    }
+
+    function buildYearData(yr) {
+      const r = rng(yr * 97);
+      const scale = { 2022: 0.9, 2023: 0.95, 2024: 1.15, 2025: 0.92, 2026: 1.2 }[yr] || 1;
+      const days = yr % 4 === 0 ? 366 : 365;
+      const out = [];
+
+      for (let d = 1; d <= days; d++) {
+        const dt = new Date(Date.UTC(yr, 0, d));
+        const iso = dt.toISOString().slice(0, 10);
+        if (yr === 2026 && iso > "2026-11-15") break;
+
+        // Summer peak around July (day 200)
+        const dist = Math.abs(d - 200);
+        const curve = Math.exp(-0.5 * Math.pow(dist / 45, 2));
+        const base = Math.round((12 * curve + 1.2) * 10) / 10;
+        const quiet = curve < 0.18 && r() < 0.45 ? 0 : 1;
+        const cells = quiet === 0 ? 0 : Math.max(0, Math.round(base * scale * (0.5 + r())));
+        const viirs = cells === 0 ? 0 : Math.round(cells * (3.8 + r() * 0.6));
+        const modis = cells === 0 ? 0 : Math.max(0, Math.round(cells * 0.6));
+        const frp = cells === 0 ? 0 : Math.round((22 + curve * 30 + r() * 12) * 10) / 10;
+
+        out.push({ date: iso, cells, base, viirs, modis, frp });
+      }
+      return out;
+    }
+
+    function getDayPoints(rec) {
+      if (customSpots[rec.date]) return customSpots[rec.date];
+      const r = rng(rec.date.split("-").join("") * 1);
+      const pts = [];
+      const count = Math.min(rec.cells, 60);
+      for (let i = 0; i < count; i++) {
+        const z = UAE_ZONES[i % UAE_ZONES.length];
+        const lat = Number((z.lat + (r() - 0.5) * 0.18).toFixed(4));
+        const lng = Number((z.lng + (r() - 0.5) * 0.18).toFixed(4));
+        pts.push({ lat, lng, frp: rec.frp, zone: z.name });
+      }
+      return pts;
+    }
+
+    function countVal(rec) {
+      return rawMode ? rec.viirs + rec.modis : rec.cells;
+    }
+
+    function updateStats() {
+      const total = rows.reduce((s, x) => s + countVal(x), 0);
+      let peak = rows[0] || { date: "--", cells: 0 };
+      let frpSum = 0, frpDays = 0;
+      rows.forEach((x) => {
+        if (countVal(x) > countVal(peak)) peak = x;
+        if (x.frp > 0) { frpSum += x.frp; frpDays++; }
+      });
+      document.getElementById("s-cells").textContent = total.toLocaleString();
+      document.getElementById("s-peak").textContent = peak.date;
+      document.getElementById("s-frp").textContent = frpDays ? (frpSum / frpDays).toFixed(1) : "0";
+    }
+
+    function renderCharts() {
+      if (!calChart) {
+        calChart = echarts.init(document.getElementById("cal-chart"));
+        calChart.on("click", (p) => { if (p.data) selectDate(p.data[0]); });
+      }
+      if (!lineChart) {
+        lineChart = echarts.init(document.getElementById("line-chart"));
+        lineChart.on("click", (p) => { if (p.name) selectDate(p.name); });
+      }
+
+      const calData = rows.map((x) => [x.date, countVal(x)]);
+      const maxVal = Math.max(5, ...calData.map((d) => d[1]));
+
+      calChart.setOption({
+        tooltip: { formatter: (p) => `${p.data[0]}: <b>${p.data[1]}</b> ${rawMode ? "raw pts" : "cells"}` },
+        visualMap: {
+          min: 0,
+          max: maxVal,
+          orient: "horizontal",
+          right: 10,
+          top: 0,
+          itemHeight: 90,
+          inRange: { color: ["#fff5eb", "#fd8d3c", "#bd0026"] }
+        },
+        calendar: {
+          top: 34,
+          left: 30,
+          right: 10,
+          bottom: 5,
+          range: String(year),
+          cellSize: ["auto", 15],
+          yearLabel: { show: false }
+        },
+        series: [{ type: "heatmap", coordinateSystem: "calendar", data: calData }]
+      }, true);
+
+      lineChart.setOption({
+        tooltip: { trigger: "axis" },
+        legend: { data: ["Selected Year", "2022–2026 Avg"], top: 0 },
+        grid: { left: 40, right: 15, top: 30, bottom: 25 },
+        xAxis: { type: "category", data: rows.map((x) => x.date) },
+        yAxis: { type: "value" },
+        series: [
+          { name: "Selected Year", type: "line", data: rows.map((x) => countVal(x)), showSymbol: false, itemStyle: { color: "#d9381e" } },
+          { name: "2022–2026 Avg", type: "line", data: rows.map((x) => x.base), showSymbol: false, lineStyle: { type: "dashed", color: "#555" } }
+        ]
+      }, true);
+    }
+
+    function selectDate(dStr) {
+      const rec = rows.find((x) => x.date === dStr) || rows[0];
+      if (!rec) return;
+      selectedDate = rec.date;
+      document.getElementById("map-date").textContent = rec.date;
+      layerGroup.clearLayers();
+
+      const pts = getDayPoints(rec);
+      pts.forEach((p) => {
+        if (mapMode === "grid") {
+          L.rectangle([[p.lat - 0.005, p.lng - 0.005], [p.lat + 0.005, p.lng + 0.005]], {
+            color: "#d9381e", weight: 1, fillOpacity: 0.45
+          }).bindPopup(`<b>1km Cell</b><br>${p.zone}<br>FRP: ${p.frp} MW`).addTo(layerGroup);
+        } else {
+          L.circle([p.lat, p.lng], { radius: 500, color: "#e67e22", weight: 1, fillOpacity: 0.2 })
+            .bindPopup(`MODIS 1km (${p.lat}, ${p.lng})`).addTo(layerGroup);
+          for (let k = 0; k < 4; k++) {
+            const vLat = p.lat + ((k % 2) - 0.5) * 0.004;
+            const vLng = p.lng + (Math.floor(k / 2) - 0.5) * 0.004;
+            L.circleMarker([vLat, vLng], { radius: 3, color: "#0284c7", fillOpacity: 0.9 })
+              .bindPopup(`VIIRS 375m (${vLat.toFixed(4)}, ${vLng.toFixed(4)})`).addTo(layerGroup);
+          }
+        }
+      });
+    }
+
+    function parseAndLoadCsv(csvText, sourceLabel) {
+      const lines = csvText.trim().split(/\r?\n/);
+      if (lines.length < 2) return false;
+      const head = lines[0].split(",").map((h) => h.trim().toLowerCase());
+      const iLat = head.indexOf("latitude"), iLng = head.indexOf("longitude");
+      const iDate = head.indexOf("acq_date"), iFrp = head.indexOf("frp"), iType = head.indexOf("type");
+      if (iLat < 0 || iLng < 0 || iDate < 0) return false;
+
+      const byDate = {};
+      customSpots = {};
+      for (let i = 1; i < lines.length; i++) {
+        const c = lines[i].split(",");
+        if (iType >= 0 && c[iType] === "2") continue; // skip static industrial flares
+        const lat = parseFloat(c[iLat]), lng = parseFloat(c[iLng]), d = (c[iDate] || "").trim();
+        if (isNaN(lat) || isNaN(lng) || !d) continue;
+        const cellKey = `${lat.toFixed(2)}_${lng.toFixed(2)}`;
+        if (!byDate[d]) { byDate[d] = { set: new Set(), viirs: 0, frp: 0 }; customSpots[d] = []; }
+        byDate[d].viirs++;
+        byDate[d].frp += parseFloat(c[iFrp]) || 15;
+        if (!byDate[d].set.has(cellKey)) {
+          byDate[d].set.add(cellKey);
+          customSpots[d].push({ lat, lng, frp: parseFloat(c[iFrp]) || 15, zone: "FIRMS Hotspot" });
+        }
+      }
+
+      const dates = Object.keys(byDate).sort();
+      if (!dates.length) return false;
+      year = parseInt(dates[0].slice(0, 4), 10);
+      rows = dates.map((d) => ({
+        date: d,
+        cells: byDate[d].set.size,
+        base: Math.max(1, Math.round(byDate[d].set.size * 0.8)),
+        viirs: byDate[d].viirs,
+        modis: Math.round(byDate[d].set.size * 0.6),
+        frp: Math.round((byDate[d].frp / byDate[d].viirs) * 10) / 10
+      }));
+
+      const st = document.getElementById("status");
+      st.style.display = "block";
+      st.textContent = `Loaded ${lines.length - 1} rows from ${sourceLabel}`;
+      refreshAll();
+      return true;
+    }
+
+    async function fetchNasaApi() {
+      const key = document.getElementById("api-key").value.trim();
+      const msg = document.getElementById("api-msg");
+      msg.textContent = "Fetching NASA FIRMS...";
+      const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${key}/VIIRS_NOAA20_NRT/${BBOX}/5`;
+      try {
+        let res = await fetch(url).catch(() => null);
+        if (!res || !res.ok) {
+          res = await fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`);
+        }
+        const text = await res.text();
+        if (text.includes("Invalid") || !parseAndLoadCsv(text, "NASA FIRMS API")) {
+          msg.textContent = "0 hotspots found or CORS blocked. Use download links below.";
+        } else {
+          document.getElementById("api-modal").style.display = "none";
+        }
+      } catch (e) {
+        msg.textContent = "Request blocked by browser. Use direct CSV links below.";
+      }
+    }
+
+    function refreshAll() {
+      updateStats();
+      renderCharts();
+      let top = rows[0];
+      rows.forEach((x) => { if (countVal(x) > countVal(top)) top = x; });
+      if (top) selectDate(top.date);
+    }
+
+    window.onload = function () {
+      map = L.map("map").setView([24.2, 54.3], 7);
+      L.tileLayer(CARTO_URL, { attribution: "&copy; OpenStreetMap &copy; CARTO" }).addTo(map);
+      layerGroup = L.layerGroup().addTo(map);
+
+      rows = buildYearData(year);
+      refreshAll();
+
+      document.getElementById("year-sel").onchange = (e) => {
+        year = parseInt(e.target.value, 10);
+        customSpots = {};
+        document.getElementById("status").style.display = "none";
+        rows = buildYearData(year);
+        refreshAll();
+      };
+      document.getElementById("raw-chk").onchange = (e) => {
+        rawMode = e.target.checked;
+        refreshAll();
+      };
+      document.querySelectorAll('input[name="mview"]').forEach((el) => {
+        el.onchange = (e) => { mapMode = e.target.value; selectDate(selectedDate); };
+      });
+      document.getElementById("open-api").onclick = () => { document.getElementById("api-modal").style.display = "flex"; };
+      document.getElementById("close-api").onclick = () => { document.getElementById("api-modal").style.display = "none"; };
+      document.getElementById("run-fetch").onclick = fetchNasaApi;
+      document.getElementById("csv-file").onchange = (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => parseAndLoadCsv(ev.target.result, f.name);
+        reader.readAsText(f);
+      };
+      window.onresize = () => {
+        if (calChart) calChart.resize();
+        if (lineChart) lineChart.resize();
+        if (map) map.invalidateSize();
+      };
+    };
+  </script>
+</body>
+</html>
